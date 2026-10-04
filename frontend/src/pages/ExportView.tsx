@@ -299,6 +299,7 @@ export default function ExportView() {
                         form: 'stele',
                         sizeCm: '',
                         calligrapher: '',
+                        rev: 1,
                         createdAt: 0,
                         updatedAt: 0,
                       },

@@ -22,11 +22,13 @@ export interface Compare {
   operator: string;
   /** 比对日期 yyyy-MM-dd */
   date: string;
+  /** 修订号（乐观锁）：断代结论保存时报出打开记录时的 rev */
+  rev: number;
   createdAt: number;
   updatedAt: number;
 }
 
-export type CompareDraft = Omit<Compare, 'id' | 'createdAt' | 'updatedAt'>;
+export type CompareDraft = Omit<Compare, 'id' | 'rev' | 'createdAt' | 'updatedAt'>;
 
 export const COMPARE_CONCLUSION_LABEL: Record<CompareConclusion, string> = {
   early: '早本',

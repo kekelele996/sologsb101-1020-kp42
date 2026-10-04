@@ -32,11 +32,16 @@ export interface Rubbing {
   dateGuess: string;
   /** 状态 */
   state: RubbingState;
+  /**
+   * 修订号（乐观锁）：登记岗保存时报出打开拓本时的 rev；
+   * 标注岗若已先存，本侧保存只并入改过的纸墨 / 钤印等字段，不再整份盖回。
+   */
+  rev: number;
   createdAt: number;
   updatedAt: number;
 }
 
-export type RubbingDraft = Omit<Rubbing, 'id' | 'createdAt' | 'updatedAt'>;
+export type RubbingDraft = Omit<Rubbing, 'id' | 'rev' | 'createdAt' | 'updatedAt'>;
 
 export const RUBBING_METHOD_LABEL: Record<RubbingMethod, string> = {
   rub: '擦拓',

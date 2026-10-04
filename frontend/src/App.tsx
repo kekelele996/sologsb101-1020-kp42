@@ -20,6 +20,7 @@ import { selectRubbings } from './stores/rubbingSlice';
 import { selectLosses } from './stores/lossSlice';
 import { initDatabase } from './utils/db';
 import { STELE_FORM_LABEL } from './types/stele';
+import ConflictCenter from './components/common/ConflictCenter';
 
 const { Header, Sider, Content, Footer } = Layout;
 
@@ -123,6 +124,7 @@ export default function App() {
             )}
           </Space>
           <Space>
+            <ConflictCenter />
             <Button size="small" onClick={() => navigate(ROUTES.rubbings)}>
               进入拓本登记
             </Button>

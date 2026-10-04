@@ -1,9 +1,19 @@
 /**
  * 损泐与比对 slice（Redux Toolkit）
  * 维护字位损泐集合、比对记录与比对 A/B 选择及筛选条件。
+ * 字位 / 断代结论的编辑与批量改程度走修订号三方合并：
+ * 标注岗保存时只并入自己动过的字位，登记岗先填的纸墨钤印不被盖回。
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { createId, db } from '@/utils/db';
+import {
+  INITIAL_REV,
+  getActor,
+  saveBatchWithRevision,
+  saveWithRevision,
+  toFieldPatch,
+  type SaveOutcome,
+} from '@/utils/concurrency';
 import type { Loss, LossDraft, LossSeverity, LossType } from '@/types/loss';
 import type { Compare, CompareDraft } from '@/types/compare';
 import { sortLosses } from '@/utils/collate';
@@ -46,7 +56,7 @@ export const loadLosses = createAsyncThunk('loss/load', async () => {
 
 export const createLoss = createAsyncThunk('loss/create', async (draft: LossDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Loss = { ...draft, id: createId('loss'), createdAt: now, updatedAt: now };
+  const row: Loss = { ...draft, id: createId('loss'), rev: INITIAL_REV, createdAt: now, updatedAt: now };
   await db.losses.put(row);
   await dispatch(loadLosses());
   return row;
@@ -54,9 +64,17 @@ export const createLoss = createAsyncThunk('loss/create', async (draft: LossDraf
 
 export const updateLoss = createAsyncThunk(
   'loss/update',
-  async (payload: { id: string; patch: Partial<Loss> }, { dispatch }) => {
-    await db.losses.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadLosses());
+  async (
+    payload: { id: string; base: Loss; patch: Partial<LossDraft> },
+  ): Promise<SaveOutcome> => {
+    return saveWithRevision({
+      tableName: 'losses',
+      id: payload.id,
+      base: payload.base as unknown as Record<string, unknown>,
+      patch: toFieldPatch(payload.patch as unknown as Record<string, unknown>),
+      actor: getActor(),
+      recordLabel: `第 ${payload.base.lineNo} 行第 ${payload.base.charNo} 字字位`,
+    });
   },
 );
 
@@ -67,20 +85,25 @@ export const removeLoss = createAsyncThunk('loss/remove', async (id: string, { d
 
 export const batchUpdateLosses = createAsyncThunk(
   'loss/batch',
-  async (payload: { ids: string[]; patch: Partial<Loss> }, { dispatch, getState }) => {
+  async (payload: { ids: string[]; patch: Partial<Pick<Loss, 'severity'>> }, { getState }) => {
     const state = getState() as RootState;
-    const now = Date.now();
-    const rows = state.loss.items
-      .filter((item) => payload.ids.includes(item.id))
-      .map((item) => ({ ...item, ...payload.patch, updatedAt: now }));
-    if (rows.length > 0) await db.losses.bulkPut(rows);
-    await dispatch(loadLosses());
+    const byId = new Map(state.loss.items.map((item) => [item.id, item]));
+    const items = payload.ids
+      .map((id) => byId.get(id))
+      .filter((item): item is Loss => Boolean(item))
+      .map((item) => ({
+        id: item.id,
+        base: item as unknown as Record<string, unknown>,
+        patch: toFieldPatch(payload.patch as unknown as Record<string, unknown>),
+        recordLabel: `第 ${item.lineNo} 行第 ${item.charNo} 字字位`,
+      }));
+    return saveBatchWithRevision('losses', items, getActor());
   },
 );
 
 export const saveCompare = createAsyncThunk('compare/save', async (draft: CompareDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Compare = { ...draft, id: createId('cmp'), createdAt: now, updatedAt: now };
+  const row: Compare = { ...draft, id: createId('cmp'), rev: INITIAL_REV, createdAt: now, updatedAt: now };
   await db.compares.put(row);
   await dispatch(loadLosses());
   return row;
@@ -88,9 +111,17 @@ export const saveCompare = createAsyncThunk('compare/save', async (draft: Compar
 
 export const updateCompare = createAsyncThunk(
   'compare/update',
-  async (payload: { id: string; patch: Partial<Compare> }, { dispatch }) => {
-    await db.compares.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadLosses());
+  async (
+    payload: { id: string; base: Compare; patch: Partial<CompareDraft> },
+  ): Promise<SaveOutcome> => {
+    return saveWithRevision({
+      tableName: 'compares',
+      id: payload.id,
+      base: payload.base as unknown as Record<string, unknown>,
+      patch: toFieldPatch(payload.patch as unknown as Record<string, unknown>),
+      actor: getActor(),
+      recordLabel: `${payload.base.date} 比对记录（${payload.base.conclusion}）`,
+    });
   },
 );
 

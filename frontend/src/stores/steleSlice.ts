@@ -1,9 +1,17 @@
 /**
  * 碑刻 slice（Redux Toolkit）
  * 维护碑刻列表、当前碑刻与筛选条件；跨页状态不留在组件内 useState。
+ * 更新走修订号三方合并：报出打开时的 rev，防止两个标签页互相盖回旧值。
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { createId, db, removeSteleCascade } from '@/utils/db';
+import {
+  INITIAL_REV,
+  getActor,
+  saveWithRevision,
+  toFieldPatch,
+  type SaveOutcome,
+} from '@/utils/concurrency';
 import type { Stele, SteleDraft, SteleForm } from '@/types/stele';
 import type { RootState } from './store';
 
@@ -38,17 +46,27 @@ export const loadSteles = createAsyncThunk('stele/load', async () => {
 
 export const createStele = createAsyncThunk('stele/create', async (draft: SteleDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Stele = { ...draft, id: createId('stele'), createdAt: now, updatedAt: now };
+  const row: Stele = { ...draft, id: createId('stele'), rev: INITIAL_REV, createdAt: now, updatedAt: now };
   await db.steles.put(row);
   await dispatch(loadSteles());
   return row;
 });
 
+/** 编辑保存：base 是打开弹窗时的整行，保存时报出自己打开的修订号 */
 export const updateStele = createAsyncThunk(
   'stele/update',
-  async (payload: { id: string; patch: Partial<Stele> }, { dispatch }) => {
-    await db.steles.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadSteles());
+  async (
+    payload: { id: string; base: Stele; patch: Partial<SteleDraft> },
+    _thunkApi,
+  ): Promise<SaveOutcome> => {
+    return saveWithRevision({
+      tableName: 'steles',
+      id: payload.id,
+      base: payload.base as unknown as Record<string, unknown>,
+      patch: toFieldPatch(payload.patch as unknown as Record<string, unknown>),
+      actor: getActor(),
+      recordLabel: payload.base.title,
+    });
   },
 );
 

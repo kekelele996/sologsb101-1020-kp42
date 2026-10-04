@@ -44,7 +44,7 @@ docker compose up -d --build      # 代码改动后重新构建
 | 构建工具 | Vite 5 | 开发服务器端口 22820 |
 | 状态管理 | Redux Toolkit 2 + React Redux 9 | `steleSlice` / `rubbingSlice` / `lossSlice` + `store.ts` 类型化 hooks |
 | 路由 | React Router 6（`createBrowserRouter`，history 模式） | nginx 侧配合 `try_files` 做 SPA fallback |
-| 本地存储 | Dexie 4（IndexedDB 封装）+ localStorage | 含数据结构版本号与 v1→v2 升级迁移 |
+| 本地存储 | Dexie 4（IndexedDB 封装）+ localStorage | 含数据结构版本号与 v1→v2→v3 升级迁移；v3 起五张业务表带修订号，支持多标签页三方合并 |
 | 容器化 | Docker 多阶段构建：`node:20-alpine` → `nginx:alpine` | 构建阶段类型检查 + 打包，运行阶段仅托管静态产物 |
 
 ---
@@ -85,9 +85,24 @@ npm run preview    # 本地预览构建产物（http://localhost:22820）
 | Rubbing 拓本 | `src/types/rubbing.ts` | `id` `steleId` `versionNo` `method`（擦拓/扑拓/蝉翼拓） `paperType` `inkTone`（浓墨/淡墨） `sizeCm` `collectionNo` `dateGuess` `state`（待编目/已编目/待比对） | 同碑多份并存，版本序号自动生成 |
 | Loss 损泐字位 | `src/types/loss.ts` | `id` `rubbingId` `lineNo` `charNo` `type`（缺字/裂痕/漫漶/石花） `severity`（轻/中/重） `note` | 按行列网格标注，同碑同字位自动并排对比 |
 | Seal 钤印 | `src/types/seal.ts` | `id` `rubbingId` `sealText` `position` `transcription` `sealType`（收藏印/鉴赏印/作者印） | 按位置排序展示，支持批量改印别 |
-| Compare 版本比对 | `src/types/compare.ts` | `id` `steleId` `rubbingIdA` `rubbingIdB` `diffCount` `conclusion`（早本/晚本/同版/待考） `operator` `date` | 选定两拓本即生成差异清单并回写断代结论 |
+| Compare 版本比对 | `src/types/compare.ts` | `id` `steleId` `rubbingIdA` `rubbingIdB` `diffCount` `conclusion`（早本/晚本/同版/待考） `operator` `date` `rev` | 选定两拓本即生成差异清单并回写断代结论 |
+| Conflict 待裁决冲突 | `src/types/conflict.ts` | `id` `table` `recordId` `recordLabel` `baseRev` `currentRev` `fields[]`（base/mine/theirs 三值） `status` | 两边同改同一字段时两版并存，顶栏冲突中心逐字段裁决 |
 
-数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 `v2`：`losses` 表增加 `charNo` 与 `[rubbingId+lineNo+charNo]` 复合索引，并在 Dexie `.upgrade()` 中按行号顺序为历史字位记录重建 `charNo`。
+数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 `v3`：
+
+- v2：`losses` 表增加 `charNo` 与 `[rubbingId+lineNo+charNo]` 复合索引，并在 Dexie `.upgrade()` 中按行号顺序为历史字位记录重建 `charNo`。
+- v3：五张业务表（`steles` / `rubbings` / `losses` / `seals` / `compares`）全部增加修订号 `rev`（初始 1，每次有实质字段写入后 +1），新增 `conflicts` 待裁决冲突表；升级时**按现有记录把没有修订号的旧数据统一补齐为 1**。
+
+### 多标签页并发保存（修订号乐观锁）
+
+登记岗与标注岗可能各开一个标签页编辑同一块碑刻 / 同一件拓本。保存逻辑集中在 `src/utils/concurrency.ts`：
+
+1. 打开编辑时记下本行修订号（弹窗标题显示「打开版本 rN」），保存时报出该 base rev；
+2. 库内 rev 与 base 一致 → 无人先动，直接写入并 rev+1；
+3. 库内 rev 更新（别人先保存过）→ 只把**本侧动过的字段**与库内最新值做三方合并（base / mine / theirs），别人改过的条目原样保留，不再整份盖回；
+4. 同一记录同一字段两边都改成不同值 → 不强做二选一：无分歧字段照常并入，分歧字段两版都写进 `conflicts` 表，顶栏「冲突」铃铛出现角标，在抽屉里逐字段「留本侧 / 取他人先存版」裁决后才落库；两边恰好改成相同值则自动收敛、不计冲突；
+5. 合并判定、行写入与冲突落库在同一 IndexedDB 事务内完成；过程性失败仅重试**本侧那次差量保存**（最多 3 次），绝不重放整行旧值；
+6. 从旧版 JSON 备份导入时，缺 `rev` 的记录同样按初始修订号补齐。
 
 ---
 
@@ -97,13 +112,13 @@ npm run preview    # 本地预览构建产物（http://localhost:22820）
 sologsb101-1020/
 ├── frontend/                     # 前端源码
 │   ├── src/
-│   │   ├── types/                # stele.ts rubbing.ts loss.ts seal.ts compare.ts
+│   │   ├── types/                # stele.ts rubbing.ts loss.ts seal.ts compare.ts conflict.ts
 │   │   ├── stores/               # steleSlice.ts rubbingSlice.ts lossSlice.ts store.ts
-│   │   ├── components/common/    # LossTag.tsx FilterBar.tsx StatBadge.tsx EmptyPanel.tsx
+│   │   ├── components/common/    # LossTag.tsx FilterBar.tsx StatBadge.tsx EmptyPanel.tsx ConflictCenter.tsx
 │   │   ├── hooks/                # useLossDiff.ts useIdbTable.ts
 │   │   ├── pages/                # SteleList.tsx RubbingList.tsx LossBoard.tsx CompareView.tsx ExportView.tsx
 │   │   ├── router/               # index.tsx
-│   │   ├── utils/                # collate.ts db.ts export.ts
+│   │   ├── utils/                # collate.ts db.ts export.ts concurrency.ts saveFeedback.ts
 │   │   ├── styles/               # main.css
 │   │   ├── App.tsx main.tsx
 │   ├── public/favicon.svg
@@ -123,7 +138,7 @@ sologsb101-1020/
 
 ## 七、数据存储说明
 
-- **IndexedDB（Dexie，数据库名 `gbrubbing`）**：5 张业务表 `steles` / `rubbings` / `losses` / `seals` / `compares`，由 `src/utils/db.ts` 统一定义 schema、版本号与升级迁移；`initDatabase()` 首次打开时自动播种**三层互相引用**的演示数据（Stele → Rubbing → Loss / Seal，另有 Stele → Compare，固定 id 如 `stele_01`、`rub_0101`、`loss_010101`），播种幂等，保证字位网格与比对台打开即有内容。
+- **IndexedDB（Dexie，数据库名 `gbrubbing`）**：5 张业务表 `steles` / `rubbings` / `losses` / `seals` / `compares`（均带修订号 `rev`）加 1 张本地工作表 `conflicts`（待裁决字段冲突，不进 JSON 备份），由 `src/utils/db.ts` 统一定义 schema、版本号与升级迁移；`initDatabase()` 首次打开时自动播种**三层互相引用**的演示数据（Stele → Rubbing → Loss / Seal，另有 Stele → Compare，固定 id 如 `stele_01`、`rub_0101`、`loss_010101`），播种幂等，保证字位网格与比对台打开即有内容。
 - **localStorage**：仅存元数据 —— `gbrubbing:db-version`（本地结构版本）、`gbrubbing:last-backup-at`（最近导出时间）、`gbrubbing:ui-prefs`（当前碑刻 / 拓本）。
 - **备份**：`/export` 页可导出 JSON（5 张表全量数据 + 结构版本号），导入时校验 `app` 字段与各集合数组完整性，覆盖导入前二次确认；另有编目卡 TXT 与损泐台账 CSV。
 - **隐私与无状态**：数据不上传任何服务器，容器不挂载命名卷；清理浏览器站点数据或更换浏览器会丢失档案，请定期导出备份。

@@ -1,9 +1,19 @@
 /**
  * 拓本 slice（Redux Toolkit）
  * 维护拓本与钤印集合及筛选条件；同一碑刻下自动生成版本序号。
+ * 拓本 / 钤印的编辑、批量改状态、批量改印别、版本序号重排全部走修订号三方合并：
+ * 登记岗保存时只并入自己动过的条目，不会把标注岗刚填的损泐 / 断代盖回旧值。
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import { createId, db, removeRubbingCascade, renumberRubbings } from '@/utils/db';
+import { createId, db, removeRubbingCascade } from '@/utils/db';
+import {
+  INITIAL_REV,
+  getActor,
+  saveBatchWithRevision,
+  saveWithRevision,
+  toFieldPatch,
+  type SaveOutcome,
+} from '@/utils/concurrency';
 import {
   nextRubbingState,
   type Rubbing,
@@ -50,44 +60,66 @@ export const loadRubbings = createAsyncThunk('rubbing/load', async () => {
 
 export const createRubbing = createAsyncThunk('rubbing/create', async (draft: RubbingDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Rubbing = { ...draft, id: createId('rub'), createdAt: now, updatedAt: now };
+  const row: Rubbing = { ...draft, id: createId('rub'), rev: INITIAL_REV, createdAt: now, updatedAt: now };
   await db.rubbings.put(row);
-  await renumberRubbings(row.steleId);
+  await dispatch(renumberRubbings(row.steleId));
   await dispatch(loadRubbings());
   return row;
 });
 
 export const updateRubbing = createAsyncThunk(
   'rubbing/update',
-  async (payload: { id: string; patch: Partial<Rubbing> }, { dispatch }) => {
-    await db.rubbings.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadRubbings());
+  async (
+    payload: { id: string; base: Rubbing; patch: Partial<RubbingDraft> },
+  ): Promise<SaveOutcome> => {
+    return saveWithRevision({
+      tableName: 'rubbings',
+      id: payload.id,
+      base: payload.base as unknown as Record<string, unknown>,
+      patch: toFieldPatch(payload.patch as unknown as Record<string, unknown>),
+      actor: getActor(),
+      recordLabel: `第 ${payload.base.versionNo} 版拓本`,
+    });
   },
 );
 
 export const advanceRubbingState = createAsyncThunk(
   'rubbing/advance',
-  async (id: string, { dispatch, getState }) => {
+  async (id: string, { getState }): Promise<SaveOutcome | null> => {
     const state = getState() as RootState;
     const row = state.rubbing.items.find((item) => item.id === id);
-    if (!row) return;
+    if (!row) return null;
     const next = nextRubbingState(row.state);
-    if (next === row.state) return;
-    await db.rubbings.update(id, { state: next, updatedAt: Date.now() } as never);
-    await dispatch(loadRubbings());
+    if (next === row.state) return null;
+    return saveWithRevision({
+      tableName: 'rubbings',
+      id,
+      base: row as unknown as Record<string, unknown>,
+      patch: { state: next },
+      actor: getActor(),
+      recordLabel: `第 ${row.versionNo} 版拓本`,
+    });
   },
 );
 
 export const batchUpdateRubbings = createAsyncThunk(
   'rubbing/batch',
-  async (payload: { ids: string[]; patch: Partial<Rubbing> }, { dispatch, getState }) => {
+  async (
+    payload: { ids: string[]; patch: Partial<Pick<Rubbing, 'state'>> },
+    { getState },
+  ) => {
     const state = getState() as RootState;
-    const now = Date.now();
-    const rows = state.rubbing.items
-      .filter((item) => payload.ids.includes(item.id))
-      .map((item) => ({ ...item, ...payload.patch, updatedAt: now }));
-    if (rows.length > 0) await db.rubbings.bulkPut(rows);
-    await dispatch(loadRubbings());
+    const byId = new Map(state.rubbing.items.map((item) => [item.id, item]));
+    const items = payload.ids
+      .map((id) => byId.get(id))
+      .filter((item): item is Rubbing => Boolean(item))
+      .map((item) => ({
+        id: item.id,
+        base: item as unknown as Record<string, unknown>,
+        patch: toFieldPatch(payload.patch as unknown as Record<string, unknown>),
+        recordLabel: `第 ${item.versionNo} 版拓本`,
+      }));
+    return saveBatchWithRevision('rubbings', items, getActor());
   },
 );
 
@@ -95,36 +127,71 @@ export const removeRubbing = createAsyncThunk('rubbing/remove', async (id: strin
   const state = getState() as RootState;
   const row = state.rubbing.items.find((item) => item.id === id);
   await removeRubbingCascade(id);
-  if (row) await renumberRubbings(row.steleId);
+  if (row) await dispatch(renumberRubbings(row.steleId));
   await dispatch(loadRubbings());
+});
+
+/** 重排某碑刻下拓本的版本序号：只有序号真的变了的拓本才推进修订号 */
+export const renumberRubbings = createAsyncThunk('rubbing/renumber', async (steleId: string, { getState }) => {
+  const state = getState() as RootState;
+  const rows = state.rubbing.items
+    .filter((item) => item.steleId === steleId)
+    .sort((a, b) => (a.versionNo === b.versionNo ? a.createdAt - b.createdAt : a.versionNo - b.versionNo));
+  const items = rows
+    .map((row, index) => ({ row, target: index + 1 }))
+    .filter(({ row, target }) => row.versionNo !== target)
+    .map(({ row, target }) => ({
+      id: row.id,
+      base: row as unknown as Record<string, unknown>,
+      patch: { versionNo: target },
+      recordLabel: `第 ${row.versionNo} 版拓本`,
+    }));
+  if (items.length > 0) {
+    return saveBatchWithRevision('rubbings', items, getActor());
+  }
+  return null;
 });
 
 /* ------------------------------ 钤印 ------------------------------ */
 
 export const createSeal = createAsyncThunk('seal/create', async (draft: SealDraft, { dispatch }) => {
   const now = Date.now();
-  await db.seals.put({ ...draft, id: createId('seal'), createdAt: now, updatedAt: now });
+  const row: Seal = { ...draft, id: createId('seal'), rev: INITIAL_REV, createdAt: now, updatedAt: now };
+  await db.seals.put(row);
   await dispatch(loadRubbings());
 });
 
 export const updateSeal = createAsyncThunk(
   'seal/update',
-  async (payload: { id: string; patch: Partial<Seal> }, { dispatch }) => {
-    await db.seals.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadRubbings());
+  async (
+    payload: { id: string; base: Seal; patch: Partial<SealDraft> },
+  ): Promise<SaveOutcome> => {
+    return saveWithRevision({
+      tableName: 'seals',
+      id: payload.id,
+      base: payload.base as unknown as Record<string, unknown>,
+      patch: toFieldPatch(payload.patch as unknown as Record<string, unknown>),
+      actor: getActor(),
+      recordLabel: `钤印「${payload.base.sealText || '未填印文'}」`,
+    });
   },
 );
 
 export const batchUpdateSeals = createAsyncThunk(
   'seal/batch',
-  async (payload: { ids: string[]; sealType: SealType }, { dispatch, getState }) => {
+  async (payload: { ids: string[]; sealType: SealType }, { getState }) => {
     const state = getState() as RootState;
-    const now = Date.now();
-    const rows = state.rubbing.seals
-      .filter((item) => payload.ids.includes(item.id))
-      .map((item) => ({ ...item, sealType: payload.sealType, updatedAt: now }));
-    if (rows.length > 0) await db.seals.bulkPut(rows);
-    await dispatch(loadRubbings());
+    const byId = new Map(state.rubbing.seals.map((item) => [item.id, item]));
+    const items = payload.ids
+      .map((id) => byId.get(id))
+      .filter((item): item is Seal => Boolean(item))
+      .map((item) => ({
+        id: item.id,
+        base: item as unknown as Record<string, unknown>,
+        patch: { sealType: payload.sealType },
+        recordLabel: `钤印「${item.sealText || '未填印文'}」`,
+      }));
+    return saveBatchWithRevision('seals', items, getActor());
   },
 );
 

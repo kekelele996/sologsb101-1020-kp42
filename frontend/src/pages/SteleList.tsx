@@ -58,6 +58,7 @@ import {
 } from '@/types/stele';
 import { COMPARE_CONCLUSION_LABEL } from '@/types/compare';
 import type { Seal } from '@/types/seal';
+import { reportSaveOutcome } from '@/utils/saveFeedback';
 
 const FILTER_KEYS = ['era', 'form'] as const;
 
@@ -149,8 +150,9 @@ export default function SteleList() {
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
     if (editing) {
-      await dispatch(updateStele({ id: editing.id, patch: values })).unwrap();
-      message.success(`已更新《${values.title}》`);
+      const outcome = await dispatch(updateStele({ id: editing.id, base: editing, patch: values })).unwrap();
+      await dispatch(loadSteles());
+      reportSaveOutcome(message, outcome, 'steles', `已更新《${values.title}》（修订 r${outcome.rev}）`);
     } else {
       const created = await dispatch(createStele(values)).unwrap();
       dispatch(setCurrentStele(created.id));
@@ -308,7 +310,11 @@ export default function SteleList() {
 
       <Modal
         open={open}
-        title={editing ? `编辑《${editing.title}》` : '新建碑刻'}
+        title={
+          editing
+            ? `编辑《${editing.title}》（打开版本 r${editing.rev}）`
+            : '新建碑刻'
+        }
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"

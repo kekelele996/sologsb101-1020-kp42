@@ -9,6 +9,8 @@ import { createId, db } from '@/utils/db';
 
 export interface IdbRecord {
   id: string;
+  /** 修订号（乐观锁），旧记录可能缺失，读取时按 1 处理 */
+  rev?: number;
   createdAt?: number;
   updatedAt?: number;
 }
@@ -94,12 +96,13 @@ export function useIdbTable<T extends IdbRecord>(
   const create = useCallback<UseIdbTableResult<T>['create']>(
     async (payload, idPrefix = 'row') => {
       const now = Date.now();
-      const record = {
+      const record: T = {
         ...(payload as object),
         id: payload.id ?? createId(idPrefix),
+        rev: typeof payload.rev === 'number' && payload.rev > 0 ? payload.rev : 1,
         createdAt: payload.createdAt ?? now,
         updatedAt: payload.updatedAt ?? now,
-      } as T;
+      } as unknown as T;
       await table.put(record);
       return record;
     },

@@ -53,6 +53,7 @@ import {
 } from '@/types/compare';
 import { buildDiffText, copyText } from '@/utils/export';
 import { encodeCoord } from '@/utils/collate';
+import { reportSaveOutcome } from '@/utils/saveFeedback';
 
 const FILTER_KEYS = ['type'] as const;
 
@@ -174,9 +175,11 @@ export default function CompareView() {
 
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
+    values.diffCount = Number(values.diffCount);
     if (editing) {
-      await dispatch(updateCompare({ id: editing.id, patch: values })).unwrap();
-      message.success('已更新比对记录');
+      const outcome = await dispatch(updateCompare({ id: editing.id, base: editing, patch: values })).unwrap();
+      await dispatch(loadLosses());
+      reportSaveOutcome(message, outcome, 'compares', '已更新比对记录');
     } else {
       await dispatch(saveCompare(values)).unwrap();
       message.success(`已保存比对记录：差异 ${values.diffCount} 字，结论「${COMPARE_CONCLUSION_LABEL[values.conclusion]}」`);
@@ -408,7 +411,7 @@ export default function CompareView() {
 
       <Modal
         open={open}
-        title={editing ? '编辑比对记录' : '保存比对记录'}
+        title={editing ? `编辑比对记录（打开版本 r${editing.rev}）` : '保存比对记录'}
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"

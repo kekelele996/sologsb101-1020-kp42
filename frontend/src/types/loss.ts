@@ -23,11 +23,16 @@ export interface Loss {
   severity: LossSeverity;
   /** 释文备注 */
   note: string;
+  /**
+   * 修订号（乐观锁）：标注岗保存时报出打开字位时的 rev；
+   * 登记岗若已先存，本侧保存只并入改过的字位 / 程度字段。
+   */
+  rev: number;
   createdAt: number;
   updatedAt: number;
 }
 
-export type LossDraft = Omit<Loss, 'id' | 'createdAt' | 'updatedAt'>;
+export type LossDraft = Omit<Loss, 'id' | 'rev' | 'createdAt' | 'updatedAt'>;
 
 export const LOSS_TYPE_LABEL: Record<LossType, string> = {
   missing: '缺字',

@@ -18,11 +18,13 @@ export interface Seal {
   transcription: string;
   /** 印别 */
   sealType: SealType;
+  /** 修订号（乐观锁）：随拓本一起参与三方合并保存 */
+  rev: number;
   createdAt: number;
   updatedAt: number;
 }
 
-export type SealDraft = Omit<Seal, 'id' | 'createdAt' | 'updatedAt'>;
+export type SealDraft = Omit<Seal, 'id' | 'rev' | 'createdAt' | 'updatedAt'>;
 
 export const SEAL_TYPE_LABEL: Record<SealType, string> = {
   collection: '收藏印',

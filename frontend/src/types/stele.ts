@@ -21,11 +21,16 @@ export interface Stele {
   sizeCm: string;
   /** 书者 */
   calligrapher: string;
+  /**
+   * 修订号（乐观锁）：本侧打开时记下 base rev，保存时与库内 rev 比对；
+   * 不一致说明别的标签页先动过，只并入本侧改动的字段。
+   */
+  rev: number;
   createdAt: number;
   updatedAt: number;
 }
 
-export type SteleDraft = Omit<Stele, 'id' | 'createdAt' | 'updatedAt'>;
+export type SteleDraft = Omit<Stele, 'id' | 'rev' | 'createdAt' | 'updatedAt'>;
 
 export const STELE_FORM_LABEL: Record<SteleForm, string> = {
   stele: '碑',

@@ -74,6 +74,7 @@ import {
 } from '@/types/seal';
 import { selectLosses } from '@/stores/lossSlice';
 import LossTag from '@/components/common/LossTag';
+import { reportSaveOutcome } from '@/utils/saveFeedback';
 
 const FILTER_KEYS = ['method', 'state'] as const;
 
@@ -165,9 +166,12 @@ export default function RubbingList() {
 
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
+    // 数字输入框回传字符串，归一化为数字后再与打开版本（base）做三方比对
+    values.versionNo = Number(values.versionNo);
     if (editing) {
-      await dispatch(updateRubbing({ id: editing.id, patch: values })).unwrap();
-      message.success(`已更新第 ${values.versionNo} 版拓本`);
+      const outcome = await dispatch(updateRubbing({ id: editing.id, base: editing, patch: values })).unwrap();
+      await dispatch(loadRubbings());
+      reportSaveOutcome(message, outcome, 'rubbings', `已更新第 ${values.versionNo} 版拓本（修订 r${outcome.rev}）`);
     } else {
       await dispatch(createRubbing(values)).unwrap();
       message.success(`已登记第 ${values.versionNo} 版拓本`);
@@ -187,8 +191,9 @@ export default function RubbingList() {
     if (!sealRubbing) return;
     const values = await sealForm.validateFields();
     if (editingSeal) {
-      await dispatch(updateSeal({ id: editingSeal.id, patch: values })).unwrap();
-      message.success('已更新钤印');
+      const outcome = await dispatch(updateSeal({ id: editingSeal.id, base: editingSeal, patch: values })).unwrap();
+      await dispatch(loadRubbings());
+      reportSaveOutcome(message, outcome, 'seals', '已更新钤印');
     } else {
       await dispatch(createSeal({ ...values, rubbingId: sealRubbing.id })).unwrap();
       message.success('已登记钤印');
@@ -238,7 +243,17 @@ export default function RubbingList() {
       width: 250,
       render: (_value, record) => (
         <Space size={4} wrap>
-          <Button size="small" type="link" onClick={() => void dispatch(advanceRubbingState(record.id))}>
+          <Button
+            size="small"
+            type="link"
+            onClick={() =>
+              void dispatch(advanceRubbingState(record.id))
+                .unwrap()
+                .then((outcome) => {
+                  if (outcome) void dispatch(loadRubbings());
+                })
+            }
+          >
             推进状态
           </Button>
           <Button size="small" type="link" icon={<TagsOutlined />} onClick={() => openSeals(record)}>
@@ -333,8 +348,13 @@ export default function RubbingList() {
               onClick={() =>
                 void dispatch(batchUpdateRubbings({ ids: selectedIds, patch: { state: batchState } }))
                   .unwrap()
-                  .then(() => {
-                    message.success(`已批量置为${RUBBING_STATE_LABEL[batchState]}`);
+                  .then((summary) => {
+                    void dispatch(loadRubbings());
+                    if (summary.conflictCount > 0) {
+                      message.warning(`批量保存：${summary.conflictCount} 条字段两边都改过，已留两版待裁决`);
+                    } else {
+                      message.success(`已批量置为${RUBBING_STATE_LABEL[batchState]}`);
+                    }
                     setSelectedIds([]);
                   })
               }
@@ -377,7 +397,7 @@ export default function RubbingList() {
 
       <Modal
         open={open}
-        title={editing ? `编辑第 ${editing.versionNo} 版拓本` : '登记拓本'}
+        title={editing ? `编辑第 ${editing.versionNo} 版拓本（打开版本 r${editing.rev}）` : '登记拓本'}
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"
@@ -481,8 +501,13 @@ export default function RubbingList() {
             onClick={() =>
               void dispatch(batchUpdateSeals({ ids: selectedSealIds, sealType: batchSealType }))
                 .unwrap()
-                .then(() => {
-                  message.success(`已批量改为${SEAL_TYPE_LABEL[batchSealType]}`);
+                .then((summary) => {
+                  void dispatch(loadRubbings());
+                  if (summary.conflictCount > 0) {
+                    message.warning(`批量改印别：${summary.conflictCount} 方两边都改过，已留两版待裁决`);
+                  } else {
+                    message.success(`已批量改为${SEAL_TYPE_LABEL[batchSealType]}`);
+                  }
                   setSelectedSealIds([]);
                 })
             }

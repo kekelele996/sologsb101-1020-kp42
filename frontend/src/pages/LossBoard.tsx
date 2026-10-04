@@ -58,6 +58,7 @@ import {
   type LossType,
 } from '@/types/loss';
 import { encodeCoord, groupByLine, maxCharNo, sortLosses } from '@/utils/collate';
+import { reportSaveOutcome } from '@/utils/saveFeedback';
 
 const FILTER_KEYS = ['type', 'severity'] as const;
 
@@ -170,9 +171,13 @@ export default function LossBoard() {
 
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
+    // InputNumber 个别情况下回传字符串，归一化后再与打开版本（base）做三方比对
+    values.lineNo = Number(values.lineNo);
+    values.charNo = Number(values.charNo);
     if (editing) {
-      await dispatch(updateLoss({ id: editing.id, patch: values })).unwrap();
-      message.success(`已更新 ${encodeCoord(values.lineNo, values.charNo)} 字位`);
+      const outcome = await dispatch(updateLoss({ id: editing.id, base: editing, patch: values })).unwrap();
+      await dispatch(loadLosses());
+      reportSaveOutcome(message, outcome, 'losses', `已更新 ${encodeCoord(values.lineNo, values.charNo)} 字位（修订 r${outcome.rev}）`);
     } else {
       await dispatch(createLoss(values)).unwrap();
       message.success(`已标注 ${encodeCoord(values.lineNo, values.charNo)} 字位`);
@@ -313,8 +318,13 @@ export default function LossBoard() {
               onClick={() =>
                 void dispatch(batchUpdateLosses({ ids: selectedIds, patch: { severity: batchSeverity } }))
                   .unwrap()
-                  .then(() => {
-                    message.success(`已批量置为「${LOSS_SEVERITY_LABEL[batchSeverity]}」`);
+                  .then((summary) => {
+                    void dispatch(loadLosses());
+                    if (summary.conflictCount > 0) {
+                      message.warning(`批量改程度：${summary.conflictCount} 条两边都改过，已留两版待裁决`);
+                    } else {
+                      message.success(`已批量置为「${LOSS_SEVERITY_LABEL[batchSeverity]}」`);
+                    }
                     setSelectedIds([]);
                   })
               }
@@ -430,7 +440,7 @@ export default function LossBoard() {
 
       <Modal
         open={open}
-        title={editing ? `编辑字位 ${encodeCoord(editing.lineNo, editing.charNo)}` : '新增损泐字位'}
+        title={editing ? `编辑字位 ${encodeCoord(editing.lineNo, editing.charNo)}（打开版本 r${editing.rev}）` : '新增损泐字位'}
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"
