@@ -25,9 +25,11 @@ export interface Loss {
   note: string;
   createdAt: number;
   updatedAt: number;
+  /** 修订号：每次保存自增，用于多标签页并发编辑的乐观并发控制 */
+  rev: number;
 }
 
-export type LossDraft = Omit<Loss, 'id' | 'createdAt' | 'updatedAt'>;
+export type LossDraft = Omit<Loss, 'id' | 'createdAt' | 'updatedAt' | 'rev'>;
 
 export const LOSS_TYPE_LABEL: Record<LossType, string> = {
   missing: '缺字',

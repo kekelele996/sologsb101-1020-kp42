@@ -20,6 +20,7 @@ import { selectRubbings } from './stores/rubbingSlice';
 import { selectLosses } from './stores/lossSlice';
 import { initDatabase } from './utils/db';
 import { STELE_FORM_LABEL } from './types/stele';
+import ConflictModal from './components/common/ConflictModal';
 
 const { Header, Sider, Content, Footer } = Layout;
 
@@ -138,6 +139,7 @@ export default function App() {
           数据仅保存在本机浏览器（IndexedDB / localStorage）· <Link to={ROUTES.export}>导出 JSON 备份</Link>
         </Footer>
       </Layout>
+      <ConflictModal />
     </Layout>
   );
 }

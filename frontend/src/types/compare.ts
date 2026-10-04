@@ -24,9 +24,11 @@ export interface Compare {
   date: string;
   createdAt: number;
   updatedAt: number;
+  /** 修订号：每次保存自增，用于多标签页并发编辑的乐观并发控制 */
+  rev: number;
 }
 
-export type CompareDraft = Omit<Compare, 'id' | 'createdAt' | 'updatedAt'>;
+export type CompareDraft = Omit<Compare, 'id' | 'createdAt' | 'updatedAt' | 'rev'>;
 
 export const COMPARE_CONCLUSION_LABEL: Record<CompareConclusion, string> = {
   early: '早本',

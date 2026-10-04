@@ -4,6 +4,7 @@
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { createId, db, removeRubbingCascade, renumberRubbings } from '@/utils/db';
+import { saveWithRevision } from '@/utils/merge';
 import {
   nextRubbingState,
   type Rubbing,
@@ -50,21 +51,30 @@ export const loadRubbings = createAsyncThunk('rubbing/load', async () => {
 
 export const createRubbing = createAsyncThunk('rubbing/create', async (draft: RubbingDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Rubbing = { ...draft, id: createId('rub'), createdAt: now, updatedAt: now };
+  const row: Rubbing = { ...draft, id: createId('rub'), createdAt: now, updatedAt: now, rev: 1 };
   await db.rubbings.put(row);
   await renumberRubbings(row.steleId);
   await dispatch(loadRubbings());
   return row;
 });
 
+/** 更新拓本：带修订号的乐观并发保存，返回保存结果或冲突草稿 */
 export const updateRubbing = createAsyncThunk(
   'rubbing/update',
-  async (payload: { id: string; patch: Partial<Rubbing> }, { dispatch }) => {
-    await db.rubbings.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadRubbings());
+  async (payload: { id: string; patch: Partial<Rubbing>; base: Rubbing }, { dispatch }) => {
+    const result = await saveWithRevision(
+      db.rubbings,
+      payload.base,
+      payload.patch,
+      'rubbing',
+      `第 ${payload.base.versionNo} 版`,
+    );
+    if (result.status === 'saved') await dispatch(loadRubbings());
+    return result;
   },
 );
 
+/** 推进拓本状态：带修订号的乐观并发保存 */
 export const advanceRubbingState = createAsyncThunk(
   'rubbing/advance',
   async (id: string, { dispatch, getState }) => {
@@ -73,8 +83,15 @@ export const advanceRubbingState = createAsyncThunk(
     if (!row) return;
     const next = nextRubbingState(row.state);
     if (next === row.state) return;
-    await db.rubbings.update(id, { state: next, updatedAt: Date.now() } as never);
-    await dispatch(loadRubbings());
+    const result = await saveWithRevision(
+      db.rubbings,
+      row,
+      { state: next },
+      'rubbing',
+      `第 ${row.versionNo} 版`,
+    );
+    if (result.status === 'saved') await dispatch(loadRubbings());
+    return result;
   },
 );
 
@@ -85,7 +102,7 @@ export const batchUpdateRubbings = createAsyncThunk(
     const now = Date.now();
     const rows = state.rubbing.items
       .filter((item) => payload.ids.includes(item.id))
-      .map((item) => ({ ...item, ...payload.patch, updatedAt: now }));
+      .map((item) => ({ ...item, ...payload.patch, rev: item.rev + 1, updatedAt: now }));
     if (rows.length > 0) await db.rubbings.bulkPut(rows);
     await dispatch(loadRubbings());
   },
@@ -103,15 +120,17 @@ export const removeRubbing = createAsyncThunk('rubbing/remove', async (id: strin
 
 export const createSeal = createAsyncThunk('seal/create', async (draft: SealDraft, { dispatch }) => {
   const now = Date.now();
-  await db.seals.put({ ...draft, id: createId('seal'), createdAt: now, updatedAt: now });
+  await db.seals.put({ ...draft, id: createId('seal'), createdAt: now, updatedAt: now, rev: 1 });
   await dispatch(loadRubbings());
 });
 
+/** 更新钤印：带修订号的乐观并发保存 */
 export const updateSeal = createAsyncThunk(
   'seal/update',
-  async (payload: { id: string; patch: Partial<Seal> }, { dispatch }) => {
-    await db.seals.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadRubbings());
+  async (payload: { id: string; patch: Partial<Seal>; base: Seal }, { dispatch }) => {
+    const result = await saveWithRevision(db.seals, payload.base, payload.patch, 'seal', payload.base.sealText);
+    if (result.status === 'saved') await dispatch(loadRubbings());
+    return result;
   },
 );
 
@@ -122,7 +141,7 @@ export const batchUpdateSeals = createAsyncThunk(
     const now = Date.now();
     const rows = state.rubbing.seals
       .filter((item) => payload.ids.includes(item.id))
-      .map((item) => ({ ...item, sealType: payload.sealType, updatedAt: now }));
+      .map((item) => ({ ...item, sealType: payload.sealType, rev: item.rev + 1, updatedAt: now }));
     if (rows.length > 0) await db.seals.bulkPut(rows);
     await dispatch(loadRubbings());
   },

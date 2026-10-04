@@ -23,9 +23,11 @@ export interface Stele {
   calligrapher: string;
   createdAt: number;
   updatedAt: number;
+  /** 修订号：每次保存自增，用于多标签页并发编辑的乐观并发控制 */
+  rev: number;
 }
 
-export type SteleDraft = Omit<Stele, 'id' | 'createdAt' | 'updatedAt'>;
+export type SteleDraft = Omit<Stele, 'id' | 'createdAt' | 'updatedAt' | 'rev'>;
 
 export const STELE_FORM_LABEL: Record<SteleForm, string> = {
   stele: '碑',

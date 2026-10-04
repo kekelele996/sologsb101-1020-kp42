@@ -20,9 +20,11 @@ export interface Seal {
   sealType: SealType;
   createdAt: number;
   updatedAt: number;
+  /** 修订号：每次保存自增，用于多标签页并发编辑的乐观并发控制 */
+  rev: number;
 }
 
-export type SealDraft = Omit<Seal, 'id' | 'createdAt' | 'updatedAt'>;
+export type SealDraft = Omit<Seal, 'id' | 'createdAt' | 'updatedAt' | 'rev'>;
 
 export const SEAL_TYPE_LABEL: Record<SealType, string> = {
   collection: '收藏印',

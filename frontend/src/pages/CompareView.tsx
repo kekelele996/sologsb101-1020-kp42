@@ -41,6 +41,7 @@ import {
   setCompareB,
   updateCompare,
 } from '@/stores/lossSlice';
+import { queueConflict } from '@/stores/conflictSlice';
 import { LOSS_TYPE_OPTIONS, type LossType } from '@/types/loss';
 import {
   COMPARE_CONCLUSION_COLOR,
@@ -175,7 +176,11 @@ export default function CompareView() {
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
     if (editing) {
-      await dispatch(updateCompare({ id: editing.id, patch: values })).unwrap();
+      const result = await dispatch(updateCompare({ id: editing.id, patch: values, base: editing })).unwrap();
+      if (result.status === 'conflict') {
+        await dispatch(queueConflict(result.conflict));
+        return;
+      }
       message.success('已更新比对记录');
     } else {
       await dispatch(saveCompare(values)).unwrap();
@@ -408,7 +413,7 @@ export default function CompareView() {
 
       <Modal
         open={open}
-        title={editing ? '编辑比对记录' : '保存比对记录'}
+        title={editing ? `编辑比对记录 · 打开时 v${editing.rev}` : '保存比对记录'}
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"

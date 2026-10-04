@@ -11,13 +11,15 @@ import type { Rubbing } from '@/types/rubbing';
 import type { Loss } from '@/types/loss';
 import type { Seal } from '@/types/seal';
 import type { Compare } from '@/types/compare';
+import type { Conflict } from '@/types/conflict';
 import { sortLosses } from './collate';
+import { withRevision } from './merge';
 
 /** 数据库名（README 与导出文件均使用该名称） */
 export const DB_NAME = 'gbrubbing';
 
 /** 当前数据结构版本号 */
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 
 /** localStorage 侧少量元数据键 */
 export const LS_KEYS = {
@@ -85,6 +87,7 @@ class RubbingDatabase extends Dexie {
   losses!: Table<Loss, string>;
   seals!: Table<Seal, string>;
   compares!: Table<Compare, string>;
+  conflicts!: Table<Conflict, string>;
 
   constructor() {
     super(DB_NAME);
@@ -99,7 +102,7 @@ class RubbingDatabase extends Dexie {
     });
 
     // v2：Loss 增加 charNo 与 [rubbingId+lineNo+charNo] 复合索引，并按行号顺序重建历史字位记录
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores({
         steles: 'id, title, era, form, location, updatedAt',
         rubbings: 'id, steleId, versionNo, method, inkTone, state, updatedAt',
@@ -128,6 +131,26 @@ class RubbingDatabase extends Dexie {
         });
         await table.bulkPut(sortLosses(rebuilt));
       });
+
+    // v3：全部业务表增加修订号 rev（存量记录补齐为 1），新增 conflicts 冲突表
+    this.version(3)
+      .stores({
+        steles: 'id, title, era, form, updatedAt',
+        rubbings: 'id, steleId, versionNo, method, state, updatedAt',
+        losses: 'id, rubbingId, lineNo, type, severity, updatedAt',
+        seals: 'id, rubbingId, sealType, updatedAt',
+        compares: 'id, steleId, rubbingIdA, rubbingIdB, conclusion, updatedAt',
+        conflicts: 'id, target, targetId, resolved, createdAt',
+      })
+      .upgrade(async (tx) => {
+        const tableNames = ['steles', 'rubbings', 'losses', 'seals', 'compares'] as const;
+        for (const tableName of tableNames) {
+          const table = tx.table(tableName);
+          const all = await table.toArray();
+          const updated = all.map((row) => withRevision(row as Record<string, unknown>, 1));
+          await table.bulkPut(updated);
+        }
+      });
   }
 }
 
@@ -154,8 +177,11 @@ export async function initDatabase(): Promise<void> {
 export async function seedDatabase(): Promise<void> {
   const now = Date.now();
   const day = 86400000;
+  /** 播种数据统一补齐修订号 rev=1（保留字面量语境类型） */
+  const withRev = <T,>(rows: Array<Omit<T, 'rev'>>): T[] =>
+    rows.map((row) => ({ ...row, rev: 1 })) as T[];
 
-  const steles: Stele[] = [
+  const steles = withRev<Stele>([
     {
       id: 'stele_01',
       title: '礼器碑',
@@ -189,17 +215,17 @@ export async function seedDatabase(): Promise<void> {
       createdAt: now - day * 36,
       updatedAt: now - day,
     },
-  ];
+  ]);
 
-  const rubbings: Rubbing[] = [
+  const rubbings = withRev<Rubbing>([
     { id: 'rub_0101', steleId: 'stele_01', versionNo: 1, method: 'rub', paperType: '宣纸', inkTone: 'thick', sizeCm: '210×88', collectionNo: 'TB-0101', dateGuess: '明拓', state: 'cataloged', createdAt: now - day * 50, updatedAt: now - day * 10 },
     { id: 'rub_0102', steleId: 'stele_01', versionNo: 2, method: 'cicada', paperType: '棉连纸', inkTone: 'light', sizeCm: '208×86', collectionNo: 'TB-0102', dateGuess: '清拓', state: 'toCompare', createdAt: now - day * 44, updatedAt: now - day * 6 },
     { id: 'rub_0201', steleId: 'stele_02', versionNo: 1, method: 'pat', paperType: '皮纸', inkTone: 'thick', sizeCm: '250×196', collectionNo: 'TB-0201', dateGuess: '清中期拓', state: 'cataloged', createdAt: now - day * 40, updatedAt: now - day * 5 },
     { id: 'rub_0202', steleId: 'stele_02', versionNo: 2, method: 'rub', paperType: '棉连纸', inkTone: 'light', sizeCm: '248×194', collectionNo: 'TB-0202', dateGuess: '清晚期拓', state: 'toCatalog', createdAt: now - day * 34, updatedAt: now - day * 4 },
     { id: 'rub_0301', steleId: 'stele_03', versionNo: 1, method: 'rub', paperType: '净皮宣', inkTone: 'thick', sizeCm: '260×90', collectionNo: 'TB-0301', dateGuess: '民国拓', state: 'toCatalog', createdAt: now - day * 20, updatedAt: now - day * 2 },
-  ];
+  ]);
 
-  const losses: Loss[] = [
+  const losses = withRev<Loss>([
     { id: 'loss_010101', rubbingId: 'rub_0101', lineNo: 3, charNo: 7, type: 'blur', severity: 'light', note: '「壽」字右下漫漶', createdAt: now - day * 30, updatedAt: now - day * 30 },
     { id: 'loss_010102', rubbingId: 'rub_0101', lineNo: 5, charNo: 2, type: 'stoneFlower', severity: 'medium', note: '石花漫及「年」字', createdAt: now - day * 30, updatedAt: now - day * 29 },
     { id: 'loss_010103', rubbingId: 'rub_0101', lineNo: 9, charNo: 11, type: 'missing', severity: 'heavy', note: '「禮」字缺末笔', createdAt: now - day * 28, updatedAt: now - day * 28 },
@@ -210,19 +236,19 @@ export async function seedDatabase(): Promise<void> {
     { id: 'loss_020201', rubbingId: 'rub_0202', lineNo: 2, charNo: 5, type: 'crack', severity: 'light', note: '崖面细裂（同前）', createdAt: now - day * 20, updatedAt: now - day * 20 },
     { id: 'loss_020202', rubbingId: 'rub_0202', lineNo: 6, charNo: 3, type: 'blur', severity: 'medium', note: '晚拓，「頌」字已漫漶', createdAt: now - day * 18, updatedAt: now - day * 18 },
     { id: 'loss_030101', rubbingId: 'rub_0301', lineNo: 4, charNo: 3, type: 'blur', severity: 'heavy', note: '民国拓，字口已平', createdAt: now - day * 10, updatedAt: now - day * 10 },
-  ];
+  ]);
 
-  const seals: Seal[] = [
+  const seals = withRev<Seal>([
     { id: 'seal_0101', rubbingId: 'rub_0101', sealText: '端方藏碑', position: '右下角', transcription: '端方（匋斋）收藏印', sealType: 'collection', createdAt: now - day * 40, updatedAt: now - day * 40 },
     { id: 'seal_0102', rubbingId: 'rub_0101', sealText: '匋斋鉴赏', position: '左下角', transcription: '端方鉴赏印', sealType: 'appraisal', createdAt: now - day * 40, updatedAt: now - day * 40 },
     { id: 'seal_0103', rubbingId: 'rub_0102', sealText: '艺风堂', position: '卷尾', transcription: '缪荃孙艺风堂藏书印', sealType: 'collection', createdAt: now - day * 30, updatedAt: now - day * 30 },
     { id: 'seal_0201', rubbingId: 'rub_0201', sealText: '石门旧拓', position: '左上角', transcription: '藏家自钤印', sealType: 'author', createdAt: now - day * 26, updatedAt: now - day * 26 },
-  ];
+  ]);
 
-  const compares: Compare[] = [
+  const compares = withRev<Compare>([
     { id: 'cmp_0101', steleId: 'stele_01', rubbingIdA: 'rub_0101', rubbingIdB: 'rub_0102', diffCount: 3, conclusion: 'early', operator: '傅砚', date: '2026-03-06', createdAt: now - day * 5, updatedAt: now - day * 5 },
     { id: 'cmp_0201', steleId: 'stele_02', rubbingIdA: 'rub_0201', rubbingIdB: 'rub_0202', diffCount: 1, conclusion: 'late', operator: '傅砚', date: '2026-03-08', createdAt: now - day * 3, updatedAt: now - day * 3 },
-  ];
+  ]);
 
   await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares], async () => {
     await db.steles.bulkPut(steles);
@@ -244,15 +270,17 @@ export interface RubbingSnapshot {
   losses: Loss[];
   seals: Seal[];
   compares: Compare[];
+  conflicts?: Conflict[];
 }
 
 export async function exportSnapshot(): Promise<RubbingSnapshot> {
-  const [steles, rubbings, losses, seals, compares] = await Promise.all([
+  const [steles, rubbings, losses, seals, compares, conflicts] = await Promise.all([
     db.steles.toArray(),
     db.rubbings.toArray(),
     db.losses.toArray(),
     db.seals.toArray(),
     db.compares.toArray(),
+    db.conflicts.toArray(),
   ]);
   return {
     app: DB_NAME,
@@ -263,6 +291,7 @@ export async function exportSnapshot(): Promise<RubbingSnapshot> {
     losses,
     seals,
     compares,
+    conflicts,
   };
 }
 
@@ -279,25 +308,28 @@ export function validateSnapshot(input: unknown): string {
 }
 
 export async function clearAllTables(): Promise<void> {
-  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares], async () => {
+  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares, db.conflicts], async () => {
     await Promise.all([
       db.steles.clear(),
       db.rubbings.clear(),
       db.losses.clear(),
       db.seals.clear(),
       db.compares.clear(),
+      db.conflicts.clear(),
     ]);
   });
 }
 
 export async function importSnapshot(snapshot: RubbingSnapshot): Promise<void> {
   await clearAllTables();
-  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares], async () => {
-    await db.steles.bulkPut(snapshot.steles);
-    await db.rubbings.bulkPut(snapshot.rubbings);
-    await db.losses.bulkPut(snapshot.losses);
-    await db.seals.bulkPut(snapshot.seals);
-    await db.compares.bulkPut(snapshot.compares);
+  const rev1 = <T extends object>(row: T): T => withRevision(row, 1);
+  await db.transaction('rw', [db.steles, db.rubbings, db.losses, db.seals, db.compares, db.conflicts], async () => {
+    await db.steles.bulkPut(snapshot.steles.map(rev1));
+    await db.rubbings.bulkPut(snapshot.rubbings.map(rev1));
+    await db.losses.bulkPut(snapshot.losses.map(rev1));
+    await db.seals.bulkPut(snapshot.seals.map(rev1));
+    await db.compares.bulkPut(snapshot.compares.map(rev1));
+    if (Array.isArray(snapshot.conflicts)) await db.conflicts.bulkPut(snapshot.conflicts);
   });
 }
 
@@ -347,5 +379,5 @@ export async function removeRubbingCascade(rubbingId: string): Promise<void> {
 export async function renumberRubbings(steleId: string): Promise<void> {
   const rows = await db.rubbings.where('steleId').equals(steleId).toArray();
   const sorted = [...rows].sort((a, b) => (a.versionNo === b.versionNo ? a.createdAt - b.createdAt : a.versionNo - b.versionNo));
-  await db.rubbings.bulkPut(sorted.map((row, index) => ({ ...row, versionNo: index + 1, updatedAt: Date.now() })));
+  await db.rubbings.bulkPut(sorted.map((row, index) => ({ ...row, versionNo: index + 1, rev: row.rev + 1, updatedAt: Date.now() })));
 }

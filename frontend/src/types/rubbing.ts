@@ -34,9 +34,11 @@ export interface Rubbing {
   state: RubbingState;
   createdAt: number;
   updatedAt: number;
+  /** 修订号：每次保存自增，用于多标签页并发编辑的乐观并发控制 */
+  rev: number;
 }
 
-export type RubbingDraft = Omit<Rubbing, 'id' | 'createdAt' | 'updatedAt'>;
+export type RubbingDraft = Omit<Rubbing, 'id' | 'createdAt' | 'updatedAt' | 'rev'>;
 
 export const RUBBING_METHOD_LABEL: Record<RubbingMethod, string> = {
   rub: '擦拓',

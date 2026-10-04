@@ -73,6 +73,7 @@ import {
   type SealType,
 } from '@/types/seal';
 import { selectLosses } from '@/stores/lossSlice';
+import { queueConflict } from '@/stores/conflictSlice';
 import LossTag from '@/components/common/LossTag';
 
 const FILTER_KEYS = ['method', 'state'] as const;
@@ -166,7 +167,11 @@ export default function RubbingList() {
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
     if (editing) {
-      await dispatch(updateRubbing({ id: editing.id, patch: values })).unwrap();
+      const result = await dispatch(updateRubbing({ id: editing.id, patch: values, base: editing })).unwrap();
+      if (result.status === 'conflict') {
+        await dispatch(queueConflict(result.conflict));
+        return;
+      }
       message.success(`已更新第 ${values.versionNo} 版拓本`);
     } else {
       await dispatch(createRubbing(values)).unwrap();
@@ -187,7 +192,11 @@ export default function RubbingList() {
     if (!sealRubbing) return;
     const values = await sealForm.validateFields();
     if (editingSeal) {
-      await dispatch(updateSeal({ id: editingSeal.id, patch: values })).unwrap();
+      const result = await dispatch(updateSeal({ id: editingSeal.id, patch: values, base: editingSeal })).unwrap();
+      if (result.status === 'conflict') {
+        await dispatch(queueConflict(result.conflict));
+        return;
+      }
       message.success('已更新钤印');
     } else {
       await dispatch(createSeal({ ...values, rubbingId: sealRubbing.id })).unwrap();
@@ -377,7 +386,7 @@ export default function RubbingList() {
 
       <Modal
         open={open}
-        title={editing ? `编辑第 ${editing.versionNo} 版拓本` : '登记拓本'}
+        title={editing ? `编辑第 ${editing.versionNo} 版拓本 · 打开时 v${editing.rev}` : '登记拓本'}
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"

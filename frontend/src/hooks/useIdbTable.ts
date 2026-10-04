@@ -11,6 +11,7 @@ export interface IdbRecord {
   id: string;
   createdAt?: number;
   updatedAt?: number;
+  rev?: number;
 }
 
 export interface UseIdbTableOptions {
@@ -99,6 +100,7 @@ export function useIdbTable<T extends IdbRecord>(
         id: payload.id ?? createId(idPrefix),
         createdAt: payload.createdAt ?? now,
         updatedAt: payload.updatedAt ?? now,
+        rev: payload.rev ?? 1,
       } as T;
       await table.put(record);
       return record;
@@ -108,14 +110,16 @@ export function useIdbTable<T extends IdbRecord>(
 
   const update = useCallback<UseIdbTableResult<T>['update']>(
     async (id, patch) => {
-      await table.update(id, { ...patch, updatedAt: Date.now() } as never);
+      const current = await table.get(id);
+      if (!current) return;
+      await table.put({ ...current, ...patch, rev: (current.rev ?? 0) + 1, updatedAt: Date.now() } as T);
     },
     [table],
   );
 
   const upsert = useCallback<UseIdbTableResult<T>['upsert']>(
     async (row) => {
-      await table.put({ ...row, updatedAt: Date.now() } as T);
+      await table.put({ ...row, rev: row.rev ?? 1, updatedAt: Date.now() } as T);
     },
     [table],
   );

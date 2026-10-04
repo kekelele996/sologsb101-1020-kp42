@@ -87,7 +87,16 @@ npm run preview    # 本地预览构建产物（http://localhost:22820）
 | Seal 钤印 | `src/types/seal.ts` | `id` `rubbingId` `sealText` `position` `transcription` `sealType`（收藏印/鉴赏印/作者印） | 按位置排序展示，支持批量改印别 |
 | Compare 版本比对 | `src/types/compare.ts` | `id` `steleId` `rubbingIdA` `rubbingIdB` `diffCount` `conclusion`（早本/晚本/同版/待考） `operator` `date` | 选定两拓本即生成差异清单并回写断代结论 |
 
-数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 `v2`：`losses` 表增加 `charNo` 与 `[rubbingId+lineNo+charNo]` 复合索引，并在 Dexie `.upgrade()` 中按行号顺序为历史字位记录重建 `charNo`。
+数据结构版本号 `DB_SCHEMA_VERSION` 定义在 `src/utils/db.ts`，当前为 `v3`：全部业务表增加修订号 `rev`（每次保存自增，用于多标签页并发编辑的乐观并发控制），新增 `conflicts` 冲突表。`v1→v2` 为 `losses` 表增加 `charNo` 与 `[rubbingId+lineNo+charNo]` 复合索引，并在 Dexie `.upgrade()` 中按行号顺序为历史字位记录重建 `charNo`；`v2→v3` 为全部存量记录补齐 `rev=1`。
+
+### 并发编辑与三向合并
+
+登记岗（拓本、纸墨、钤印）与标注岗（损泐字位、断代结论）常各开一个标签页同时编辑同一块碑刻。为避免后保存的一方把对方刚填的内容盖回旧值，所有记录的保存都走带修订号的乐观并发控制（`src/utils/merge.ts`）：
+
+- **修订号 `rev`**：每条记录自带 `rev`，每次保存自增。编辑弹窗标题显示「打开时 vN」，即本侧打开时的版本。
+- **三向合并**：保存时若库中最新 `rev` 与打开时一致，直接保存；若已被对方先动过（`rev` 变大），则按字段做三向合并——本侧没动的字段保留对方版本，只有本侧动过的字段采用本侧值。
+- **冲突保留两版**：若同一条记录的同一个字段两边都改过且值不同，判定为冲突，写入 `conflicts` 表并弹出全局冲突弹窗，逐字段展示「本侧修改 / 对方先动版本」供挑选，合并后只重试本侧这一次保存。
+- **存量升级**：旧数据没有 `rev`，升级到 v3 时按现有记录补齐 `rev=1`。
 
 ---
 

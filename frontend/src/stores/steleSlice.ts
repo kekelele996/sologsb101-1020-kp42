@@ -4,6 +4,7 @@
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { createId, db, removeSteleCascade } from '@/utils/db';
+import { saveWithRevision } from '@/utils/merge';
 import type { Stele, SteleDraft, SteleForm } from '@/types/stele';
 import type { RootState } from './store';
 
@@ -38,17 +39,19 @@ export const loadSteles = createAsyncThunk('stele/load', async () => {
 
 export const createStele = createAsyncThunk('stele/create', async (draft: SteleDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Stele = { ...draft, id: createId('stele'), createdAt: now, updatedAt: now };
+  const row: Stele = { ...draft, id: createId('stele'), createdAt: now, updatedAt: now, rev: 1 };
   await db.steles.put(row);
   await dispatch(loadSteles());
   return row;
 });
 
+/** 更新碑刻：带修订号的乐观并发保存，返回保存结果或冲突草稿 */
 export const updateStele = createAsyncThunk(
   'stele/update',
-  async (payload: { id: string; patch: Partial<Stele> }, { dispatch }) => {
-    await db.steles.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadSteles());
+  async (payload: { id: string; patch: Partial<Stele>; base: Stele }, { dispatch }) => {
+    const result = await saveWithRevision(db.steles, payload.base, payload.patch, 'stele', payload.patch.title ?? payload.base.title);
+    if (result.status === 'saved') await dispatch(loadSteles());
+    return result;
   },
 );
 

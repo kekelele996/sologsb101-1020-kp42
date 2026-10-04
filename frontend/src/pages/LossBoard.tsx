@@ -44,6 +44,7 @@ import {
   setLossTypes,
   updateLoss,
 } from '@/stores/lossSlice';
+import { queueConflict } from '@/stores/conflictSlice';
 import {
   LOSS_SEVERITY_COLOR,
   LOSS_SEVERITY_LABEL,
@@ -171,7 +172,11 @@ export default function LossBoard() {
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
     if (editing) {
-      await dispatch(updateLoss({ id: editing.id, patch: values })).unwrap();
+      const result = await dispatch(updateLoss({ id: editing.id, patch: values, base: editing })).unwrap();
+      if (result.status === 'conflict') {
+        await dispatch(queueConflict(result.conflict));
+        return;
+      }
       message.success(`已更新 ${encodeCoord(values.lineNo, values.charNo)} 字位`);
     } else {
       await dispatch(createLoss(values)).unwrap();
@@ -430,7 +435,7 @@ export default function LossBoard() {
 
       <Modal
         open={open}
-        title={editing ? `编辑字位 ${encodeCoord(editing.lineNo, editing.charNo)}` : '新增损泐字位'}
+        title={editing ? `编辑字位 ${encodeCoord(editing.lineNo, editing.charNo)} · 打开时 v${editing.rev}` : '新增损泐字位'}
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"

@@ -42,6 +42,7 @@ import {
   setSteleKeyword,
   updateStele,
 } from '@/stores/steleSlice';
+import { queueConflict } from '@/stores/conflictSlice';
 import {
   selectRubbings,
   setRubbingSteleFilter,
@@ -149,7 +150,11 @@ export default function SteleList() {
   const submit = async (): Promise<void> => {
     const values = await form.validateFields();
     if (editing) {
-      await dispatch(updateStele({ id: editing.id, patch: values })).unwrap();
+      const result = await dispatch(updateStele({ id: editing.id, patch: values, base: editing })).unwrap();
+      if (result.status === 'conflict') {
+        await dispatch(queueConflict(result.conflict));
+        return;
+      }
       message.success(`已更新《${values.title}》`);
     } else {
       const created = await dispatch(createStele(values)).unwrap();
@@ -308,7 +313,7 @@ export default function SteleList() {
 
       <Modal
         open={open}
-        title={editing ? `编辑《${editing.title}》` : '新建碑刻'}
+        title={editing ? `编辑《${editing.title}》 · 打开时 v${editing.rev}` : '新建碑刻'}
         onCancel={() => setOpen(false)}
         onOk={() => void submit()}
         okText="保存"

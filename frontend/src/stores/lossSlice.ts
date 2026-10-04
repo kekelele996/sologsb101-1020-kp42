@@ -4,6 +4,7 @@
  */
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { createId, db } from '@/utils/db';
+import { saveWithRevision } from '@/utils/merge';
 import type { Loss, LossDraft, LossSeverity, LossType } from '@/types/loss';
 import type { Compare, CompareDraft } from '@/types/compare';
 import { sortLosses } from '@/utils/collate';
@@ -46,17 +47,25 @@ export const loadLosses = createAsyncThunk('loss/load', async () => {
 
 export const createLoss = createAsyncThunk('loss/create', async (draft: LossDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Loss = { ...draft, id: createId('loss'), createdAt: now, updatedAt: now };
+  const row: Loss = { ...draft, id: createId('loss'), createdAt: now, updatedAt: now, rev: 1 };
   await db.losses.put(row);
   await dispatch(loadLosses());
   return row;
 });
 
+/** 更新损泐字位：带修订号的乐观并发保存，返回保存结果或冲突草稿 */
 export const updateLoss = createAsyncThunk(
   'loss/update',
-  async (payload: { id: string; patch: Partial<Loss> }, { dispatch }) => {
-    await db.losses.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadLosses());
+  async (payload: { id: string; patch: Partial<Loss>; base: Loss }, { dispatch }) => {
+    const result = await saveWithRevision(
+      db.losses,
+      payload.base,
+      payload.patch,
+      'loss',
+      `L${String(payload.base.lineNo).padStart(2, '0')}C${String(payload.base.charNo).padStart(2, '0')}`,
+    );
+    if (result.status === 'saved') await dispatch(loadLosses());
+    return result;
   },
 );
 
@@ -72,7 +81,7 @@ export const batchUpdateLosses = createAsyncThunk(
     const now = Date.now();
     const rows = state.loss.items
       .filter((item) => payload.ids.includes(item.id))
-      .map((item) => ({ ...item, ...payload.patch, updatedAt: now }));
+      .map((item) => ({ ...item, ...payload.patch, rev: item.rev + 1, updatedAt: now }));
     if (rows.length > 0) await db.losses.bulkPut(rows);
     await dispatch(loadLosses());
   },
@@ -80,17 +89,25 @@ export const batchUpdateLosses = createAsyncThunk(
 
 export const saveCompare = createAsyncThunk('compare/save', async (draft: CompareDraft, { dispatch }) => {
   const now = Date.now();
-  const row: Compare = { ...draft, id: createId('cmp'), createdAt: now, updatedAt: now };
+  const row: Compare = { ...draft, id: createId('cmp'), createdAt: now, updatedAt: now, rev: 1 };
   await db.compares.put(row);
   await dispatch(loadLosses());
   return row;
 });
 
+/** 更新比对记录：带修订号的乐观并发保存 */
 export const updateCompare = createAsyncThunk(
   'compare/update',
-  async (payload: { id: string; patch: Partial<Compare> }, { dispatch }) => {
-    await db.compares.update(payload.id, { ...payload.patch, updatedAt: Date.now() } as never);
-    await dispatch(loadLosses());
+  async (payload: { id: string; patch: Partial<Compare>; base: Compare }, { dispatch }) => {
+    const result = await saveWithRevision(
+      db.compares,
+      payload.base,
+      payload.patch,
+      'compare',
+      payload.base.date,
+    );
+    if (result.status === 'saved') await dispatch(loadLosses());
+    return result;
   },
 );
 
